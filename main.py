@@ -5,11 +5,16 @@ from datetime import datetime
 from web3 import Web3
 from eth_account import Account
 import threading
+from telegram import Bot
 
 # Настройки подключения к Ethereum ноде (например, Infura)
 INFURA_URL = "https://arbitrum-mainnet.infura.io/v3/f28dc230304b458795022c41cea8a7a4"
 EXPLORER_URL = "https://arbiscan.io/tx/"
+TELEGRAM_BOT_TOKEN = "???"
+TELEGRAM_CHAT_ID = "???"
+
 web3 = Web3(Web3.HTTPProvider(INFURA_URL))
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 # Контрактные адреса и ABI функции
 contract_address = "0x1cdc19b13729f16c5284a0ace825f83fc9d799f4"
@@ -84,7 +89,7 @@ contract_abi = [
 contract = web3.eth.contract(address=contract_address, abi=contract_abi)
 
 # Epoch начальное значение
-epoch = 6079
+epoch = 6258
 
 # Чтение приватных ключей из файла
 with open('wallets.txt', 'r') as file:
@@ -178,6 +183,11 @@ def execute_claim(wallet, epoch):
     return web3.to_hex(tx_hash)
 
 
+def send_telegram_message(message):
+    """Отправка сообщения в Telegram."""
+    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+
+
 def log_and_record(wallet, action_description, log_file, csv_writer, current_time):
     """Логирование и запись в CSV файл."""
     account = Account.from_key(wallet).address
@@ -197,6 +207,10 @@ def execute_transaction(wallet, function, amount, epoch, delay, log_file, csv_wr
         action_description = f'выполнил ставку на {function.fn_name} на сумму {amount} ETH, {status} {link}'
     else:
         action_description = f'НЕ выполнил ставку потому что "{status}" {link}'
+        log_and_record(wallet, action_description, log_file, csv_writer, current_time)
+        if "Bet is too early/late" in status:
+            send_telegram_message(f'Software stopped: {action_description}')
+            raise SystemExit(f'Software stopped due to error: {action_description}')
     log_and_record(wallet, action_description, log_file, csv_writer, current_time)
 
     claim_result = check_claimable(wallet, epoch)
@@ -228,9 +242,9 @@ def run_cycle(epoch, private_keys, log_file, work_file):
     total_amount_betBull = total_amount_betBear * random.uniform(0.97, 1.03)  # учитываем погрешность 3%
     betBull_amounts = distribute_total_amount(total_amount_betBull, len(wallets_betBull))
 
-    # Генерация задержек для транзакций в пределах 10 минут
-    delays_betBear = [random.uniform(0, 600) for _ in range(len(wallets_betBear))]
-    delays_betBull = [random.uniform(0, 600) for _ in range(len(wallets_betBull))]
+    # Генерация задержек для транзакций в пределах от 2 до 8 минут (120-480 секунд)
+    delays_betBear = [random.uniform(120, 480) for _ in range(len(wallets_betBear))]
+    delays_betBull = [random.uniform(120, 480) for _ in range(len(wallets_betBull))]
 
     threads = []
 
