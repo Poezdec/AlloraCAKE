@@ -6,12 +6,15 @@ from web3 import Web3
 from eth_account import Account
 import threading
 from telegram import Bot
+import asyncio
+from telegram.error import NetworkError
+import os
 
 # Настройки подключения к Ethereum ноде (например, Infura)
 INFURA_URL = "https://arbitrum-mainnet.infura.io/v3/f28dc230304b458795022c41cea8a7a4"
 EXPLORER_URL = "https://arbiscan.io/tx/"
-TELEGRAM_BOT_TOKEN = "???"
-TELEGRAM_CHAT_ID = "???"
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
 
 web3 = Web3(Web3.HTTPProvider(INFURA_URL))
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -85,11 +88,15 @@ contract_abi = [
     }
 ]
 
+# Создание и установка нового Event Loop
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 # Создание экземпляра контракта
 contract = web3.eth.contract(address=contract_address, abi=contract_abi)
 
 # Epoch начальное значение
-epoch = 6258
+epoch = 6000
 
 # Чтение приватных ключей из файла
 with open('wallets.txt', 'r') as file:
@@ -183,9 +190,12 @@ def execute_claim(wallet, epoch):
     return web3.to_hex(tx_hash)
 
 
-def send_telegram_message(message):
-    """Отправка сообщения в Telegram."""
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+async def send_telegram_message(message):
+    """Асинхронная отправка сообщения в Telegram."""
+    try:
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+    except NetworkError as e:
+        print(f"Ошибка сети при отправке сообщения: {e}")
 
 
 def log_and_record(wallet, action_description, log_file, csv_writer, current_time):
@@ -199,35 +209,40 @@ def log_and_record(wallet, action_description, log_file, csv_writer, current_tim
 
 def execute_transaction(wallet, function, amount, epoch, delay, log_file, csv_writer):
     """Функция для выполнения транзакции с задержкой."""
-    time.sleep(delay)
-    current_time = datetime.now().strftime("%H:%M:%S")
-    tx_hash = send_transaction(wallet, function, amount, epoch)
-    status, link = check_transaction_status(tx_hash)
-    if status == "Success":
-        action_description = f'выполнил ставку на {function.fn_name} на сумму {amount} ETH, {status} {link}'
-    else:
-        action_description = f'НЕ выполнил ставку потому что "{status}" {link}'
-        log_and_record(wallet, action_description, log_file, csv_writer, current_time)
-        if "Bet is too early/late" in status:
-            send_telegram_message(f'Software stopped: {action_description}')
-            raise SystemExit(f'Software stopped due to error: {action_description}')
-    log_and_record(wallet, action_description, log_file, csv_writer, current_time)
-
-    claim_result = check_claimable(wallet, epoch)
-    if claim_result:
-        claim_delay = random.uniform(5, 30)  # задержка перед выполнением claim
-        time.sleep(claim_delay)
+    try:
+        time.sleep(delay)
         current_time = datetime.now().strftime("%H:%M:%S")
-        claim_tx_hash = execute_claim(wallet, epoch)
-        claim_status, claim_link = check_transaction_status(claim_tx_hash)
-        if claim_status == "Success":
-            claim_description = f'claim доступен и ВЫПОЛНЕН {claim_link}'
+        tx_hash = send_transaction(wallet, function, amount, epoch)
+        status, link = check_transaction_status(tx_hash)
+        if status == "Success":
+            action_description = f'выполнил ставку на {function.fn_name} на сумму {amount} ETH, {status} {link}'
         else:
-            claim_description = f'claim доступен, но НЕ выполнен {claim_link}'
-        log_and_record(wallet, claim_description, log_file, csv_writer, current_time)
-    else:
-        current_time = datetime.now().strftime("%H:%M:%S")
-        log_and_record(wallet, "claim НЕ доступен", log_file, csv_writer, current_time)
+            action_description = f'НЕ выполнил ставку потому что "{status}" {link}'
+            log_and_record(wallet, action_description, log_file, csv_writer, current_time)
+            # Остановка программы при любом статусе ошибки
+            loop.run_until_complete(send_telegram_message(f'Software stopped: {action_description}'))
+            os._exit(1)  # Немедленная остановка всех потоков и процессов
+        log_and_record(wallet, action_description, log_file, csv_writer, current_time)
+
+        claim_result = check_claimable(wallet, epoch)
+        if claim_result:
+            claim_delay = random.uniform(5, 30)  # задержка перед выполнением claim
+            time.sleep(claim_delay)
+            current_time = datetime.now().strftime("%H:%M:%S")
+            claim_tx_hash = execute_claim(wallet, epoch)
+            claim_status, claim_link = check_transaction_status(claim_tx_hash)
+            if claim_status == "Success":
+                claim_description = f'claim доступен и ВЫПОЛНЕН {claim_link}'
+            else:
+                claim_description = f'claim доступен, но НЕ выполнен {claim_link}'
+            log_and_record(wallet, claim_description, log_file, csv_writer, current_time)
+        else:
+            current_time = datetime.now().strftime("%H:%M:%S")
+            log_and_record(wallet, "claim НЕ доступен", log_file, csv_writer, current_time)
+    except Exception as e:
+        print(f"Ошибка при выполнении транзакции: {e}")
+        loop.run_until_complete(send_telegram_message(f'Unhandled exception: {str(e)}'))
+        os._exit(1)  # Немедленная остановка всех потоков и процессов
 
 
 def run_cycle(epoch, private_keys, log_file, work_file):
