@@ -1,6 +1,7 @@
 # AlloraCAKE
 
 ![telegram-cloud-photo-size-2-5285256716189031658-y](https://github.com/user-attachments/assets/a47fc8dd-c4b2-4ad1-b5f9-7e17efa5822d)
+https://pancakeswap.finance/prediction?token=ETH&chain=arb
 
 !!! Для старта каждый раз нужно указывать верную эпоху(следующию которая начнется), а потом мы ждем когда таймер на панкейке дойдет до конца и тогда запускаем софт
 
