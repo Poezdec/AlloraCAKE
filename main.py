@@ -9,12 +9,27 @@ from telegram import Bot
 import asyncio
 from telegram.error import NetworkError
 import os
+import ccxt
 
-# Настройки подключения к Ethereum ноде (например, Infura)
+# Настройки подключения к Ethereum ноде
 INFURA_URL = "https://arbitrum-mainnet.infura.io/v3/f28dc230304b458795022c41cea8a7a4"
 EXPLORER_URL = "https://arbiscan.io/tx/"
 TELEGRAM_BOT_TOKEN = ""
 TELEGRAM_CHAT_ID = ""
+
+# Binance API ключи
+BINANCE_API_KEY = ""
+BINANCE_API_SECRET = ""
+
+# Настройка подключения к Binance
+exchange = ccxt.binance({
+    'apiKey': BINANCE_API_KEY,
+    'secret': BINANCE_API_SECRET,
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'spot'
+    }
+})
 
 web3 = Web3(Web3.HTTPProvider(INFURA_URL))
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -96,7 +111,7 @@ asyncio.set_event_loop(loop)
 contract = web3.eth.contract(address=contract_address, abi=contract_abi)
 
 # Epoch начальное значение
-epoch = 6000
+epoch = 6666
 
 # Чтение приватных ключей из файла
 with open('wallets.txt', 'r') as file:
@@ -104,6 +119,9 @@ with open('wallets.txt', 'r') as file:
 
 # Перемешивание аккаунтов при старте
 random.shuffle(private_keys)
+
+# Минимальный баланс для выполнения ставки
+MIN_BALANCE = 0.01  # ETH
 
 
 def generate_bet_amounts(num_wallets, min_amount=0.0015, max_amount=0.006):
@@ -207,11 +225,51 @@ def log_and_record(wallet, action_description, log_file, csv_writer, current_tim
     log_file.flush()
 
 
+def check_and_withdraw_from_binance(wallet_address, withdrawal_min=0.05, withdrawal_max=0.06):
+    """Проверка баланса и вывод средств с Binance при необходимости."""
+    balance_wei = web3.eth.get_balance(wallet_address)  # Получение баланса в wei
+    balance_eth = balance_wei / (10 ** 18)  # Перевод в ETH
+
+    if balance_eth < MIN_BALANCE:
+        withdrawal_amount = random.uniform(withdrawal_min, withdrawal_max)
+
+        # Ограничиваем до 8 знаков после запятой
+        withdrawal_amount = round(withdrawal_amount, 8)
+
+        try:
+            # Выполнение вывода средств
+            response = exchange.withdraw(
+                code='ETH',
+                amount=withdrawal_amount,
+                address=wallet_address,
+                params={
+                    "network": "ARBITRUM"  # Сеть Ethereum
+                }
+            )
+            print(f"Запрос на вывод {withdrawal_amount:.8f} ETH с Binance для адреса {wallet_address} отправлен.")
+        except Exception as e:
+            print(f"Ошибка при запросе на вывод средств с Binance: {str(e)}")
+
+
+def process_accounts_for_balances(private_keys):
+    """Проверка балансов и пополнение при необходимости."""
+    for key in private_keys:
+        account_address = Account.from_key(key).address
+        check_and_withdraw_from_binance(account_address)
+
+
 def execute_transaction(wallet, function, amount, epoch, delay, log_file, csv_writer):
     """Функция для выполнения транзакции с задержкой."""
     try:
+        # Пропуск транзакции, если сумма отрицательная или нулевая
+        if amount <= 0:
+            print(
+                f"Сумма ставки отрицательная или равна нулю: {amount} ETH. Пропускаем транзакцию для кошелька {Account.from_key(wallet).address}.")
+            return
+
         time.sleep(delay)
         current_time = datetime.now().strftime("%H:%M:%S")
+
         tx_hash = send_transaction(wallet, function, amount, epoch)
         status, link = check_transaction_status(tx_hash)
         if status == "Success":
@@ -219,9 +277,8 @@ def execute_transaction(wallet, function, amount, epoch, delay, log_file, csv_wr
         else:
             action_description = f'НЕ выполнил ставку потому что "{status}" {link}'
             log_and_record(wallet, action_description, log_file, csv_writer, current_time)
-            # Остановка программы при любом статусе ошибки
-            loop.run_until_complete(send_telegram_message(f'Software stopped: {action_description}'))
-            os._exit(1)  # Немедленная остановка всех потоков и процессов
+            # Сообщение о проблеме в Telegram, но без остановки программы
+            loop.run_until_complete(send_telegram_message(f'Error in transaction: {action_description}'))
         log_and_record(wallet, action_description, log_file, csv_writer, current_time)
 
         claim_result = check_claimable(wallet, epoch)
@@ -257,6 +314,9 @@ def run_cycle(epoch, private_keys, log_file, work_file):
     total_amount_betBull = total_amount_betBear * random.uniform(0.97, 1.03)  # учитываем погрешность 3%
     betBull_amounts = distribute_total_amount(total_amount_betBull, len(wallets_betBull))
 
+    # Проверка балансов и пополнение с OKX, если необходимо
+    process_accounts_for_balances(private_keys)
+
     # Генерация задержек для транзакций в пределах от 2 до 8 минут (120-480 секунд)
     delays_betBear = [random.uniform(120, 480) for _ in range(len(wallets_betBear))]
     delays_betBull = [random.uniform(120, 480) for _ in range(len(wallets_betBull))]
@@ -291,13 +351,13 @@ def run_cycle(epoch, private_keys, log_file, work_file):
     # Запуск потоков для выполнения транзакций
     for wallet, amount, delay in zip(wallets_betBear, betBear_amounts, delays_betBear):
         t = threading.Thread(target=execute_transaction, args=(
-        wallet, contract.functions.betBear(epoch), amount, epoch, delay, log_file, csv.writer(log_file)))
+            wallet, contract.functions.betBear(epoch), amount, epoch, delay, log_file, csv.writer(log_file)))
         t.start()
         threads.append(t)
 
     for wallet, amount, delay in zip(wallets_betBull, betBull_amounts, delays_betBull):
         t = threading.Thread(target=execute_transaction, args=(
-        wallet, contract.functions.betBull(epoch), amount, epoch, delay, log_file, csv.writer(log_file)))
+            wallet, contract.functions.betBull(epoch), amount, epoch, delay, log_file, csv.writer(log_file)))
         t.start()
         threads.append(t)
 
