@@ -263,13 +263,12 @@ def execute_transaction(wallet, function, amount, epoch, delay, log_file, csv_wr
     try:
         # Пропуск транзакции, если сумма отрицательная или нулевая
         if amount <= 0:
-            print(
-                f"Сумма ставки отрицательная или равна нулю: {amount} ETH. Пропускаем транзакцию для кошелька {Account.from_key(wallet).address}.")
+            print(f"Сумма ставки отрицательная или равна нулю: {amount} ETH. Пропускаем транзакцию для кошелька {Account.from_key(wallet).address}.")
             return
-
+        
         time.sleep(delay)
         current_time = datetime.now().strftime("%H:%M:%S")
-
+        
         tx_hash = send_transaction(wallet, function, amount, epoch)
         status, link = check_transaction_status(tx_hash)
         if status == "Success":
@@ -277,8 +276,10 @@ def execute_transaction(wallet, function, amount, epoch, delay, log_file, csv_wr
         else:
             action_description = f'НЕ выполнил ставку потому что "{status}" {link}'
             log_and_record(wallet, action_description, log_file, csv_writer, current_time)
-            # Сообщение о проблеме в Telegram, но без остановки программы
+            # Сообщение о проблеме в Telegram
             loop.run_until_complete(send_telegram_message(f'Error in transaction: {action_description}'))
+            os._exit(1)  # Немедленная остановка всех потоков и процессов
+        
         log_and_record(wallet, action_description, log_file, csv_writer, current_time)
 
         claim_result = check_claimable(wallet, epoch)
